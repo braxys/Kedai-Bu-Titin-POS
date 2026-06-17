@@ -10,9 +10,9 @@
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <!-- Babel for JSX -->
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone@7.23.6/babel.min.js"></script>
     <!-- Lucide Icons -->
-    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://unpkg.com/lucide@0.330.0/dist/umd/lucide.min.js"></script>
 
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #fdfbf7; }
@@ -64,7 +64,7 @@
             { id: 'm1', name: 'Ayam Geprek', basePrice: 10000, icon: 'drumstick' },
             { id: 'm3', name: 'Ayam Bakar', basePrice: 12000, icon: 'flame' },
             { id: 'm4', name: 'Kue', basePrice: 1000, icon: 'cake' },
-            { id: 'm5', name: 'Tiwul', basePrice: 13000, icon: 'bowl' },
+            { id: 'm5', name: 'Tiwul', basePrice: 13000, icon: 'salad' },
             { id: 'm6', name: 'Prasmanan', basePrice: 0, icon: 'utensils' },
             { id: 'm7', name: 'Kukusan', basePrice: 0, icon: 'soup' },
             { id: 'm8', name: 'Minuman', basePrice: 0, icon: 'cup-soda' },
@@ -108,7 +108,7 @@
 
             // Tab & View State
             const [activeTab, setActiveTab] = useState('KASIR'); 
-            // Internal database tetap SIANG/MALAM, tapi UI menampilkannya Pagi/Siang
+            // Internal database menggunakan SIANG/MALAM
             const [stockViewSession, setStockViewSession] = useState('SIANG');
 
             // Cart State
@@ -135,6 +135,8 @@
             });
 
             // Stock State
+            const [allStock, setAllStock] = useState([]);
+            const [selectedStockDate, setSelectedStockDate] = useState(getTodayDocId());
             const [dailyStock, setDailyStock] = useState({ SIANG: {}, MALAM: {} });
 
             // Session State (Database SIANG = Pagi, MALAM = Siang)
@@ -249,7 +251,7 @@
                     }
                 });
 
-                // Fetch Orders
+                // Fetch Orders (Tanpa mapping, murni ambil data SIANG/MALAM)
                 const ordersRef = fb.collection(fb.db, 'artifacts', fb.appId, 'public', 'data', 'orders_kedai_titin');
                 const unsubOrders = fb.onSnapshot(ordersRef, 
                     (snapshot) => {
@@ -262,25 +264,23 @@
                     (error) => { console.error(error); setIsLoading(false); }
                 );
 
-                // Fetch Today's Stock (Tanpa di-mapping. Murni Siang & Malam dari database lama)
-                const stockRef = fb.doc(fb.db, 'artifacts', fb.appId, 'public', 'data', 'stock_kedai_titin', todayId);
-                const unsubStock = fb.onSnapshot(stockRef, (docSnap) => {
-                    if (docSnap.exists()) {
-                        const data = docSnap.data();
-                        setDailyStock({
-                            SIANG: data.SIANG || {},
-                            MALAM: data.MALAM || {}
-                        });
-                    } else {
-                        setDailyStock({ SIANG: {}, MALAM: {} });
-                    }
+                // Fetch All Stock (Tanpa mapping)
+                const stockCollRef = fb.collection(fb.db, 'artifacts', fb.appId, 'public', 'data', 'stock_kedai_titin');
+                const unsubStockAll = fb.onSnapshot(stockCollRef, (snapshot) => {
+                    const data = [];
+                    snapshot.forEach(doc => {
+                        data.push({ id: doc.id, ...doc.data() });
+                    });
+                    setAllStock(data);
                 }, (error) => console.error(error));
 
-                // Fetch All Finance
+                // Fetch All Finance (Tanpa mapping)
                 const financeCollRef = fb.collection(fb.db, 'artifacts', fb.appId, 'public', 'data', 'finance_kedai_titin');
                 const unsubFinanceAll = fb.onSnapshot(financeCollRef, (snapshot) => {
                     const data = [];
-                    snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() }));
+                    snapshot.forEach(doc => {
+                        data.push({ id: doc.id, ...doc.data() });
+                    });
                     setAllFinance(data);
                 }, (error) => console.error(error));
 
@@ -325,8 +325,21 @@
 
                 const timerId = setTimeout(runCleanup, 3000); 
 
-                return () => { unsubOrders(); unsubStock(); unsubFinanceAll(); unsubDeletedOrders(); unsubSettings(); clearTimeout(timerId); };
+                return () => { unsubOrders(); unsubStockAll(); unsubFinanceAll(); unsubDeletedOrders(); unsubSettings(); clearTimeout(timerId); };
             }, [user, fb]);
+
+            // Sync dailyStock state with selectedStockDate
+            useEffect(() => {
+                const data = allStock.find(d => d.id === selectedStockDate);
+                if (data) {
+                    setDailyStock({
+                        SIANG: data.SIANG || {},
+                        MALAM: data.MALAM || {}
+                    });
+                } else {
+                    setDailyStock({ SIANG: {}, MALAM: {} });
+                }
+            }, [selectedStockDate, allStock]);
 
             // Sync dailyFinance state with selectedFinanceDate
             useEffect(() => {
@@ -362,8 +375,16 @@
 
             // --- COMPUTED DATA ---
             const isAuthorized = activeUser?.role === 'ADMIN' || isTempAdminUnlocked;
-            const isPastDate = selectedFinanceDate !== getTodayDocId();
-            const canEditFinance = isAuthorized || !isPastDate;
+            
+            const isPastFinanceDate = selectedFinanceDate !== getTodayDocId();
+            // UI 'Pagi' mengedit state 'SIANG'
+            const canEditFinancePagi = isAuthorized || (!isPastFinanceDate && activeSession === 'SIANG'); 
+            // UI 'Siang' mengedit state 'MALAM'
+            const canEditFinanceSiang = isAuthorized || (!isPastFinanceDate && activeSession === 'MALAM'); 
+
+            const isPastStockDate = selectedStockDate !== getTodayDocId();
+            const canEditStockPagi = isAuthorized || (!isPastStockDate && activeSession === 'SIANG'); 
+            const canEditStockSiang = isAuthorized || (!isPastStockDate && activeSession === 'MALAM'); 
 
             const formatRupiah = (number) => {
                 return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(number);
@@ -374,7 +395,7 @@
                 setTimeout(() => setToast({ show: false, message: "", type: "success" }), 3500);
             };
 
-            // Array 7 Hari Terakhir untuk Dropdown Keuangan
+            // Array 7 Hari Terakhir untuk Dropdown
             const last7Days = useMemo(() => {
                 const days = [];
                 for (let i = 0; i < 7; i++) {
@@ -455,21 +476,23 @@
                 };
             }, [orders, allFinance]);
 
-            const soldItems = useMemo(() => {
+            // Untuk Stok (Menghitung Terjual berdasarkan tanggal Stok terpilih)
+            const soldItemsForStock = useMemo(() => {
                 const counts = { SIANG: {}, MALAM: {} };
-                const todayStart = new Date();
-                todayStart.setHours(0,0,0,0);
-                const todayTime = todayStart.getTime();
+                const selectedDateStart = new Date(selectedStockDate);
+                selectedDateStart.setHours(0,0,0,0);
+                const selectedDateEnd = selectedDateStart.getTime() + 86400000 - 1;
 
-                orders.filter(o => o.timestamp >= todayTime).forEach(order => {
+                orders.filter(o => o.timestamp >= selectedDateStart.getTime() && o.timestamp <= selectedDateEnd).forEach(order => {
                     const session = order.session || 'SIANG';
                     if (order.items && Array.isArray(order.items)) {
                         order.items.forEach(item => { counts[session][item.name] = (counts[session][item.name] || 0) + item.qty; });
                     }
                 });
                 return counts;
-            }, [orders]);
+            }, [orders, selectedStockDate]);
 
+            // Finance Stats Khusus untuk "Tanggal Terpilih"
             const financeStats = useMemo(() => {
                 const selectedDateStart = new Date(selectedFinanceDate);
                 selectedDateStart.setHours(0,0,0,0);
@@ -592,7 +615,7 @@
                     timestamp: Date.now(),
                     kasir: activeUser.name,
                     isQris: isQris,
-                    session: activeSession
+                    session: activeSession // Murni menyimpan 'SIANG' atau 'MALAM' ke DB
                 };
 
                 try {
@@ -650,6 +673,11 @@
             const cancelAdminLogin = () => { setShowAdminLoginModal(false); setPendingDeleteId(null); };
 
             const handleUpdateStock = (sessionType, itemName, field, value) => {
+                if (!isAuthorized) {
+                    if (sessionType === 'SIANG' && !canEditStockPagi) return; // 'SIANG' internal = Pagi UI
+                    if (sessionType === 'MALAM' && !canEditStockSiang) return; // 'MALAM' internal = Siang UI
+                }
+
                 const val = Number(value) || 0;
                 setDailyStock(prev => {
                     const newState = {
@@ -659,9 +687,9 @@
                             [itemName]: { ...((prev[sessionType] || {})[itemName] || {awal: 0, tambah: 0, fisik: 0}), [field]: val }
                         }
                     };
-                    // Fitur Auto-Save
+                    // Fitur Auto-Save murni SIANG dan MALAM
                     if (user && fb !== 'NO_DB') {
-                        const stockRef = fb.doc(fb.db, 'artifacts', fb.appId, 'public', 'data', 'stock_kedai_titin', getTodayDocId());
+                        const stockRef = fb.doc(fb.db, 'artifacts', fb.appId, 'public', 'data', 'stock_kedai_titin', selectedStockDate);
                         fb.setDoc(stockRef, newState, { merge: true }).catch(console.error);
                     }
                     return newState;
@@ -724,7 +752,7 @@
                 const csvRows = [["Tanggal", "Waktu", "Rincian Pesanan", "Sesi", "Kasir", "Total Harga (Rp)"].join(',')];
                 orders.forEach(order => {
                     const d = new Date(order.timestamp);
-                    // Translate CSV Export text as well
+                    // Terjemahkan nama sesi untuk file Excel
                     const sessionName = order.session === 'MALAM' ? 'SIANG' : 'PAGI';
                     csvRows.push([d.toLocaleDateString('id-ID'), d.toLocaleTimeString('id-ID'), `"${order.name.replace(/"/g, '""')}"`, sessionName, order.kasir ? `"${order.kasir}"` : "Tidak Diketahui", order.price].join(','));
                 });
@@ -811,7 +839,7 @@
                 );
             }
 
-            // MAIN APP (Using SIANG logic for Pagi UI, and MALAM logic for Siang UI)
+            // MAIN APP (Tampilan menyesuaikan secara visual tanpa merusak database internal)
             return (
                 <div className={`min-h-screen font-sans text-gray-800 pb-12 flex flex-col transition-colors duration-500 ${activeSession === 'SIANG' ? 'bg-sky-50' : 'bg-orange-50/40'}`}>
                     {/* NAVBAR */}
@@ -1062,12 +1090,34 @@
 
                         {/* ================= TAB STOK ================= */}
                         {activeTab === 'STOK' && (
-                            <div className="fade-in max-w-4xl mx-auto">
+                            <div className="fade-in max-w-4xl mx-auto space-y-6">
+                                
+                                {/* OPSI PILIH TANGGAL STOK (7 HARI TERAKHIR) */}
+                                <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex items-center justify-between">
+                                    <span className="font-bold text-gray-700 flex items-center gap-2"><Icon name="calendar" className="w-5 h-5"/> Laporan Stok:</span>
+                                    <select
+                                        value={selectedStockDate}
+                                        onChange={(e) => setSelectedStockDate(e.target.value)}
+                                        className="p-2 border border-gray-300 rounded-lg outline-none focus:border-blue-500 font-semibold text-gray-800 bg-gray-50"
+                                    >
+                                        {last7Days.map(d => (
+                                            <option key={d.id} value={d.id}>{d.label} ({d.id})</option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                {!isAuthorized && (
+                                    <div className="bg-red-50 text-red-700 p-3 rounded-xl border border-red-200 text-sm font-semibold flex items-center gap-2">
+                                        <Icon name={isPastStockDate ? "lock" : "alert-triangle"} className="w-5 h-5"/> 
+                                        {isPastStockDate ? "Laporan stok hari sebelumnya terkunci (Hanya Admin)." : `Sesi selain '${activeSession === 'SIANG' ? 'Pagi' : 'Siang'}' saat ini terkunci.`}
+                                    </div>
+                                )}
+
                                 <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
                                     <div className={`p-6 text-white flex justify-between items-center transition-colors duration-500 ${activeSession === 'SIANG' ? 'bg-gradient-to-r from-cyan-600 to-blue-500' : 'bg-gradient-to-r from-orange-500 to-yellow-500'}`}>
                                         <div>
                                             <h2 className="text-2xl font-bold flex items-center gap-2"><Icon name="package" /> Manajemen Stok Harian</h2>
-                                            <p className="text-white/80 text-sm mt-1">Tanggal: {new Date().toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</p>
+                                            <p className="text-white/80 text-sm mt-1">Tanggal Data: {selectedStockDate}</p>
                                         </div>
                                     </div>
                                     
@@ -1096,25 +1146,27 @@
                                             <tbody className="divide-y divide-gray-100">
                                                 {MENU_ITEMS.map(item => {
                                                     const s = dailyStock[stockViewSession]?.[item.name] || { awal: 0, tambah: 0, fisik: 0 };
-                                                    const terjual = soldItems[stockViewSession]?.[item.name] || 0;
+                                                    const terjual = soldItemsForStock[stockViewSession]?.[item.name] || 0;
                                                     const sisaSistem = (s.awal + s.tambah) - terjual;
                                                     const selisih = s.fisik - sisaSistem;
                                                     
+                                                    const canEditCurrentStockView = stockViewSession === 'SIANG' ? canEditStockPagi : canEditStockSiang;
+
                                                     return (
                                                         <tr key={item.id} className="hover:bg-gray-50">
                                                             <td className="p-4 font-bold text-gray-800 flex items-center gap-2">
                                                                 <Icon name={item.icon} className="w-4 h-4 text-gray-400"/> {item.name}
                                                             </td>
                                                             <td className="p-3">
-                                                                <input type="number" min="0" value={s.awal || ''} onChange={(e)=>handleUpdateStock(stockViewSession, item.name, 'awal', e.target.value)} className="w-full min-w-[120px] px-3 py-2 border border-gray-200 rounded-lg text-center focus:ring-2 focus:ring-orange-400 outline-none" placeholder="0"/>
+                                                                <input disabled={!canEditCurrentStockView} type="number" min="0" value={s.awal || ''} onChange={(e)=>handleUpdateStock(stockViewSession, item.name, 'awal', e.target.value)} className="w-full min-w-[120px] px-3 py-2 border border-gray-200 rounded-lg text-center focus:ring-2 focus:ring-orange-400 outline-none disabled:bg-gray-100" placeholder="0"/>
                                                             </td>
                                                             <td className="p-3">
-                                                                <input type="number" min="0" value={s.tambah || ''} onChange={(e)=>handleUpdateStock(stockViewSession, item.name, 'tambah', e.target.value)} className="w-full min-w-[120px] px-3 py-2 border border-gray-200 rounded-lg text-center focus:ring-2 focus:ring-orange-400 outline-none" placeholder="0"/>
+                                                                <input disabled={!canEditCurrentStockView} type="number" min="0" value={s.tambah || ''} onChange={(e)=>handleUpdateStock(stockViewSession, item.name, 'tambah', e.target.value)} className="w-full min-w-[120px] px-3 py-2 border border-gray-200 rounded-lg text-center focus:ring-2 focus:ring-orange-400 outline-none disabled:bg-gray-100" placeholder="0"/>
                                                             </td>
                                                             <td className="p-4 text-center font-bold text-red-500 bg-red-50/30">{terjual}</td>
                                                             <td className="p-4 text-center font-bold text-blue-600 bg-blue-50/30">{sisaSistem}</td>
                                                             <td className="p-3">
-                                                                <input type="number" min="0" value={s.fisik || ''} onChange={(e)=>handleUpdateStock(stockViewSession, item.name, 'fisik', e.target.value)} className="w-full min-w-[120px] px-3 py-2 border border-gray-200 rounded-lg text-center focus:ring-2 focus:ring-orange-400 outline-none font-bold" placeholder="0"/>
+                                                                <input disabled={!canEditCurrentStockView} type="number" min="0" value={s.fisik || ''} onChange={(e)=>handleUpdateStock(stockViewSession, item.name, 'fisik', e.target.value)} className="w-full min-w-[120px] px-3 py-2 border border-gray-200 rounded-lg text-center focus:ring-2 focus:ring-orange-400 outline-none font-bold disabled:bg-gray-100" placeholder="0"/>
                                                             </td>
                                                             <td className="p-4 text-center font-bold">
                                                                 <span className={`px-2 py-1 rounded ${selisih === 0 ? 'text-green-600 bg-green-100' : selisih < 0 ? 'text-red-600 bg-red-100' : 'text-blue-600 bg-blue-100'}`}>
@@ -1153,9 +1205,10 @@
                                     </select>
                                 </div>
 
-                                {!canEditFinance && (
+                                {!isAuthorized && (
                                     <div className="bg-red-50 text-red-700 p-3 rounded-xl border border-red-200 text-sm font-semibold flex items-center gap-2">
-                                        <Icon name="alert-triangle" className="w-5 h-5"/> Mode Hanya-Lihat. Hanya Admin yang dapat mengedit data hari sebelumnya.
+                                        <Icon name={isPastFinanceDate ? "lock" : "alert-triangle"} className="w-5 h-5"/> 
+                                        {isPastFinanceDate ? "Laporan keuangan hari sebelumnya terkunci (Hanya Admin)." : `Sesi selain '${activeSession === 'SIANG' ? 'Pagi' : 'Siang'}' saat ini terkunci.`}
                                     </div>
                                 )}
 
@@ -1197,7 +1250,7 @@
                                             
                                             <div>
                                                 <h3 className="font-bold text-gray-700 mb-3 flex items-center gap-2"><Icon name="receipt" className="w-4 h-4"/> Rincian Pengeluaran</h3>
-                                                {canEditFinance && (
+                                                {canEditFinancePagi && (
                                                     <form className="flex gap-2 mb-4" onSubmit={(e) => { e.preventDefault(); handleAddExpense('SIANG'); }}>
                                                         <input type="text" placeholder="Keterangan..." value={expenseInputs.SIANG.ket} onChange={e=>setExpenseInputs(prev=>({...prev, SIANG: {...prev.SIANG, ket: e.target.value}}))} className="w-full px-3 py-2 border rounded-lg text-sm outline-none focus:border-orange-500"/>
                                                         <input type="number" placeholder="Biaya (Rp)" value={expenseInputs.SIANG.biaya} onChange={e=>setExpenseInputs(prev=>({...prev, SIANG: {...prev.SIANG, biaya: e.target.value}}))} className="w-32 px-3 py-2 border rounded-lg text-sm outline-none focus:border-orange-500"/>
@@ -1211,7 +1264,7 @@
                                                             <span className="text-sm font-semibold">{exp.ket}</span>
                                                             <div className="flex items-center gap-3">
                                                                 <span className="text-sm font-bold text-red-500">-{formatRupiah(exp.biaya)}</span>
-                                                                {canEditFinance && <button onClick={() => handleDeleteExpense('SIANG', exp.id)} className="text-gray-400 hover:text-red-500"><Icon name="x" className="w-4 h-4"/></button>}
+                                                                {canEditFinancePagi && <button onClick={() => handleDeleteExpense('SIANG', exp.id)} className="text-gray-400 hover:text-red-500"><Icon name="x" className="w-4 h-4"/></button>}
                                                             </div>
                                                         </div>
                                                     ))}
@@ -1240,7 +1293,7 @@
                                             </div>
                                             <div className="flex justify-between items-center">
                                                 <span className="text-sm text-gray-600">Plusan (+):</span>
-                                                <input disabled={!canEditFinance} type="number" value={dailyFinance.plusanSiang || ''} onChange={(e) => setDailyFinance(prev => ({...prev, plusanSiang: Number(e.target.value)}))} className="w-32 px-2 py-1 border border-gray-300 rounded text-right text-sm focus:border-orange-500 outline-none font-bold disabled:bg-gray-100" placeholder="0"/>
+                                                <input disabled={!canEditFinancePagi} type="number" value={dailyFinance.plusanSiang || ''} onChange={(e) => setDailyFinance(prev => ({...prev, plusanSiang: Number(e.target.value)}))} className="w-32 px-2 py-1 border border-gray-300 rounded text-right text-sm focus:border-orange-500 outline-none font-bold disabled:bg-gray-100" placeholder="0"/>
                                             </div>
                                             <div className="flex justify-between items-center pb-2 border-b border-gray-200">
                                                 <span className="text-sm text-gray-600">Total Pengeluaran (-):</span>
@@ -1254,7 +1307,7 @@
                                             
                                             <div className="flex justify-between items-center pt-3 mt-3 border-t border-gray-200">
                                                 <span className="text-sm text-gray-600">Selisih Tambahan (+):</span>
-                                                <input disabled={!canEditFinance} type="number" value={dailyFinance.selisihTambahanSiang || ''} onChange={(e) => setDailyFinance(prev => ({...prev, selisihTambahanSiang: Number(e.target.value)}))} className="w-32 px-2 py-1 border border-gray-300 rounded text-right text-sm focus:border-orange-500 outline-none font-bold disabled:bg-gray-100" placeholder="0"/>
+                                                <input disabled={!canEditFinancePagi} type="number" value={dailyFinance.selisihTambahanSiang || ''} onChange={(e) => setDailyFinance(prev => ({...prev, selisihTambahanSiang: Number(e.target.value)}))} className="w-32 px-2 py-1 border border-gray-300 rounded text-right text-sm focus:border-orange-500 outline-none font-bold disabled:bg-gray-100" placeholder="0"/>
                                             </div>
                                         </div>
                                     </div>
@@ -1264,8 +1317,8 @@
                                         <div className="flex-1 w-full">
                                             <label className="block text-xs font-bold text-gray-500 mb-1 uppercase tracking-wider">Hitung Uang Fisik di Laci</label>
                                             <div className="flex gap-2">
-                                                <input disabled={!canEditFinance} type="number" value={dailyFinance.uangLaciSiang || ''} onChange={(e) => setDailyFinance(prev => ({...prev, uangLaciSiang: Number(e.target.value)}))} className="w-full p-3 text-xl font-bold text-gray-800 border-2 border-gray-200 rounded-xl focus:border-orange-500 outline-none disabled:bg-gray-100" placeholder="0"/>
-                                                {canEditFinance && <button onClick={() => saveFinanceToDb('SIANG')} className="bg-gray-800 hover:bg-gray-900 text-white font-bold px-5 rounded-xl flex items-center gap-2"><Icon name="save" className="w-5 h-5"/> Simpan</button>}
+                                                <input disabled={!canEditFinancePagi} type="number" value={dailyFinance.uangLaciSiang || ''} onChange={(e) => setDailyFinance(prev => ({...prev, uangLaciSiang: Number(e.target.value)}))} className="w-full p-3 text-xl font-bold text-gray-800 border-2 border-gray-200 rounded-xl focus:border-orange-500 outline-none disabled:bg-gray-100" placeholder="0"/>
+                                                {canEditFinancePagi && <button onClick={() => saveFinanceToDb('SIANG')} className="bg-gray-800 hover:bg-gray-900 text-white font-bold px-5 rounded-xl flex items-center gap-2"><Icon name="save" className="w-5 h-5"/> Simpan</button>}
                                             </div>
                                         </div>
                                         <div className={`p-4 rounded-xl w-full lg:w-5/12 border ${financeStats.siang.selisih === 0 ? 'bg-green-50 border-green-200 text-green-700' : financeStats.siang.selisih < 0 ? 'bg-red-50 border-red-200 text-red-700' : 'bg-blue-50 border-blue-200 text-blue-700'}`}>
@@ -1300,7 +1353,7 @@
                                             
                                             <div>
                                                 <h3 className="font-bold text-gray-700 mb-3 flex items-center gap-2"><Icon name="receipt" className="w-4 h-4"/> Rincian Pengeluaran</h3>
-                                                {canEditFinance && (
+                                                {canEditFinanceSiang && (
                                                     <form className="flex gap-2 mb-4" onSubmit={(e) => { e.preventDefault(); handleAddExpense('MALAM'); }}>
                                                         <input type="text" placeholder="Keterangan..." value={expenseInputs.MALAM.ket} onChange={e=>setExpenseInputs(prev=>({...prev, MALAM: {...prev.MALAM, ket: e.target.value}}))} className="w-full px-3 py-2 border rounded-lg text-sm outline-none focus:border-indigo-500"/>
                                                         <input type="number" placeholder="Biaya (Rp)" value={expenseInputs.MALAM.biaya} onChange={e=>setExpenseInputs(prev=>({...prev, MALAM: {...prev.MALAM, biaya: e.target.value}}))} className="w-32 px-3 py-2 border rounded-lg text-sm outline-none focus:border-indigo-500"/>
@@ -1314,7 +1367,7 @@
                                                             <span className="text-sm font-semibold">{exp.ket}</span>
                                                             <div className="flex items-center gap-3">
                                                                 <span className="text-sm font-bold text-red-500">-{formatRupiah(exp.biaya)}</span>
-                                                                {canEditFinance && <button onClick={() => handleDeleteExpense('MALAM', exp.id)} className="text-gray-400 hover:text-red-500"><Icon name="x" className="w-4 h-4"/></button>}
+                                                                {canEditFinanceSiang && <button onClick={() => handleDeleteExpense('MALAM', exp.id)} className="text-gray-400 hover:text-red-500"><Icon name="x" className="w-4 h-4"/></button>}
                                                             </div>
                                                         </div>
                                                     ))}
@@ -1343,7 +1396,7 @@
                                             </div>
                                             <div className="flex justify-between items-center">
                                                 <span className="text-sm text-gray-600">Plusan (+):</span>
-                                                <input disabled={!canEditFinance} type="number" value={dailyFinance.plusanMalam || ''} onChange={(e) => setDailyFinance(prev => ({...prev, plusanMalam: Number(e.target.value)}))} className="w-32 px-2 py-1 border border-gray-300 rounded text-right text-sm focus:border-indigo-500 outline-none font-bold disabled:bg-gray-100" placeholder="0"/>
+                                                <input disabled={!canEditFinanceSiang} type="number" value={dailyFinance.plusanMalam || ''} onChange={(e) => setDailyFinance(prev => ({...prev, plusanMalam: Number(e.target.value)}))} className="w-32 px-2 py-1 border border-gray-300 rounded text-right text-sm focus:border-indigo-500 outline-none font-bold disabled:bg-gray-100" placeholder="0"/>
                                             </div>
                                             <div className="flex justify-between items-center pb-2 border-b border-gray-200">
                                                 <span className="text-sm text-gray-600">Total Pengeluaran (-):</span>
@@ -1357,7 +1410,7 @@
                                             
                                             <div className="flex justify-between items-center pt-3 mt-3 border-t border-gray-200">
                                                 <span className="text-sm text-gray-600">Selisih Tambahan (+):</span>
-                                                <input disabled={!canEditFinance} type="number" value={dailyFinance.selisihTambahanMalam || ''} onChange={(e) => setDailyFinance(prev => ({...prev, selisihTambahanMalam: Number(e.target.value)}))} className="w-32 px-2 py-1 border border-gray-300 rounded text-right text-sm focus:border-indigo-500 outline-none font-bold disabled:bg-gray-100" placeholder="0"/>
+                                                <input disabled={!canEditFinanceSiang} type="number" value={dailyFinance.selisihTambahanMalam || ''} onChange={(e) => setDailyFinance(prev => ({...prev, selisihTambahanMalam: Number(e.target.value)}))} className="w-32 px-2 py-1 border border-gray-300 rounded text-right text-sm focus:border-indigo-500 outline-none font-bold disabled:bg-gray-100" placeholder="0"/>
                                             </div>
                                         </div>
                                     </div>
@@ -1367,8 +1420,8 @@
                                         <div className="flex-1 w-full">
                                             <label className="block text-xs font-bold text-gray-500 mb-1 uppercase tracking-wider">Hitung Uang Fisik di Laci</label>
                                             <div className="flex gap-2">
-                                                <input disabled={!canEditFinance} type="number" value={dailyFinance.uangLaciMalam || ''} onChange={(e) => setDailyFinance(prev => ({...prev, uangLaciMalam: Number(e.target.value)}))} className="w-full p-3 text-xl font-bold text-gray-800 border-2 border-gray-200 rounded-xl focus:border-indigo-500 outline-none disabled:bg-gray-100" placeholder="0"/>
-                                                {canEditFinance && <button onClick={() => saveFinanceToDb('MALAM')} className="bg-gray-800 hover:bg-gray-900 text-white font-bold px-5 rounded-xl flex items-center gap-2"><Icon name="save" className="w-5 h-5"/> Simpan</button>}
+                                                <input disabled={!canEditFinanceSiang} type="number" value={dailyFinance.uangLaciMalam || ''} onChange={(e) => setDailyFinance(prev => ({...prev, uangLaciMalam: Number(e.target.value)}))} className="w-full p-3 text-xl font-bold text-gray-800 border-2 border-gray-200 rounded-xl focus:border-indigo-500 outline-none disabled:bg-gray-100" placeholder="0"/>
+                                                {canEditFinanceSiang && <button onClick={() => saveFinanceToDb('MALAM')} className="bg-gray-800 hover:bg-gray-900 text-white font-bold px-5 rounded-xl flex items-center gap-2"><Icon name="save" className="w-5 h-5"/> Simpan</button>}
                                             </div>
                                         </div>
                                         <div className={`p-4 rounded-xl w-full lg:w-5/12 border ${financeStats.malam.selisih === 0 ? 'bg-green-50 border-green-200 text-green-700' : financeStats.malam.selisih < 0 ? 'bg-red-50 border-red-200 text-red-700' : 'bg-blue-50 border-blue-200 text-blue-700'}`}>
